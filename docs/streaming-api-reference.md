@@ -133,20 +133,18 @@ Transcription results are streamed in real-time as speech is detected:
 ```json
 {
   "type": "Results",
+  "request_id": "abc123-...",
   "transcript": "नमस्ते आप कैसे हैं",
-  "is_final": true,
-  "duration": 2.5,
-  "start": 0.0
+  "is_final": true
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `type` | string | Always `"Results"` |
+| `request_id` | string | Session identifier (matches Metadata) |
 | `transcript` | string | The transcribed text |
 | `is_final` | boolean | `true` for final results, `false` for partials |
-| `duration` | number | Audio duration in seconds |
-| `start` | number | Start time offset in seconds |
 
 #### Partial vs Final Results
 
