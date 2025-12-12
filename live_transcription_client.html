@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+Luna STT - Live Transcription Reference Client
+==============================================
+
+A browser-based reference implementation for Luna Speech-to-Text API.
+Demonstrates real-time audio streaming via WebSocket.
+
+API Documentation: https://docs.heypixa.ai/documentation/
+
+Features:
+  - Real-time microphone capture
+  - Automatic resampling (browser rate → 16kHz)
+  - Linear16 PCM encoding
+  - Live streaming transcription
+  - Partial and final result handling
+
+Requirements:
+  - Modern browser with WebSocket and getUserMedia support
+  - Valid Luna API key
+
+Usage:
+  1. Open this file in a browser
+  2. Enter your API key
+  3. Click "Start" to begin transcription
+-->
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Luna STT - Live Transcription</title>
+    <style>
+        /* =================================================================
+           Design System
+           ================================================================= */
+        :root {
+            --bg-primary: #0a0a0c;
+            --bg-secondary: #111116;
+            --bg-tertiary: #1a1a22;
+            --accent: #8b5cf6;
+            --accent-dim: #6d28d9;
+            --text-primary: #fafafa;
+            --text-secondary: #a1a1aa;
+            --text-muted: #52525b;
+            --success: #10b981;
+            --error: #f43f5e;
+            --warning: #f59e0b;
+            --border: #27272a;
+            --radius: 8px;
+            --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', ui-monospace, monospace;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: var(--font-mono);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding: 1.5rem;
+        }
+
+        /* =================================================================
+           Layout
+           ================================================================= */
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .logo {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--accent);
+            letter-spacing: -0.5px;
+        }
+
+        .logo span {
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        /* =================================================================
+           Status Badge
+           ================================================================= */
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            padding: 0.4rem 0.75rem;
+            background: var(--bg-secondary);
+            border-radius: 20px;
+            border: 1px solid var(--border);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--text-muted);
+            transition: background 0.2s;
+        }
+
+        .status-dot.live {
+            background: var(--success);
+            box-shadow: 0 0 8px var(--success);
+            animation: pulse 1.5s infinite;
+        }
+
+        .status-dot.error {
+            background: var(--error);
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* =================================================================
+           Configuration Form
+           ================================================================= */
+        .config-row {
+            display: grid;
+            grid-template-columns: 1fr 200px 80px auto;
+            gap: 0.75rem;
+            margin-bottom: 1.5rem;
+        }
+
+        @media (max-width: 768px) {
+            .config-row {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .config-row input {
+            width: 100%;
+            padding: 0.6rem 0.85rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 0.8rem;
+            transition: border-color 0.2s;
+        }
+
+        .config-row input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .config-row input::placeholder {
+            color: var(--text-muted);
+        }
+
+        /* =================================================================
+           Buttons
+           ================================================================= */
+        .btn {
+            padding: 0.6rem 1.25rem;
+            font-family: inherit;
+            font-size: 0.8rem;
+            font-weight: 600;
+            border: none;
+            border-radius: var(--radius);
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: var(--accent-dim);
+        }
+
+        .btn-stop {
+            background: var(--error);
+            color: white;
+        }
+
+        .btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        /* =================================================================
+           Transcript Display
+           ================================================================= */
+        .transcript-container {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            min-height: 400px;
+            max-height: 60vh;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        .transcript-header {
+            position: sticky;
+            top: 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border);
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            z-index: 10;
+        }
+
+        .transcript-header button {
+            padding: 0.25rem 0.6rem;
+            font-size: 0.65rem;
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        .transcript-header button:hover {
+            background: var(--bg-primary);
+            color: var(--text-primary);
+        }
+
+        .transcript-canvas {
+            padding: 1.25rem;
+            font-size: 1.1rem;
+            line-height: 1.9;
+            color: var(--text-primary);
+            min-height: 300px;
+        }
+
+        .transcript-canvas .final {
+            color: var(--text-primary);
+        }
+
+        .transcript-canvas .partial {
+            color: var(--accent);
+            opacity: 0.85;
+        }
+
+        .transcript-canvas .cursor {
+            display: inline-block;
+            width: 2px;
+            height: 1.2em;
+            background: var(--accent);
+            margin-left: 2px;
+            animation: blink 1s infinite;
+            vertical-align: text-bottom;
+        }
+
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 300px;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        .empty-state svg {
+            width: 48px;
+            height: 48px;
+            margin-bottom: 1rem;
+            opacity: 0.3;
+        }
+
+        /* =================================================================
+           Stats Bar
+           ================================================================= */
+        .stats-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            margin-top: 1rem;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+        }
+
+        .stat {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .stat-value {
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        /* =================================================================
+           Debug Panel
+           ================================================================= */
+        .debug-panel {
+            margin-top: 1.5rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+
+        .debug-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem 0.75rem;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border);
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .debug-log {
+            font-size: 0.7rem;
+            padding: 0.75rem;
+            max-height: 150px;
+            overflow-y: auto;
+            background: var(--bg-primary);
+            color: var(--text-muted);
+        }
+
+        .debug-log .error { color: var(--error); }
+        .debug-log .success { color: var(--success); }
+        .debug-log .info { color: var(--accent); }
+        .debug-log .warning { color: var(--warning); }
+
+        .debug-log div {
+            padding: 0.15rem 0;
+            word-break: break-all;
+        }
+
+        /* =================================================================
+           Scrollbar
+           ================================================================= */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--bg-primary);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-muted);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">LUNA<span>.stt</span></div>
+            <div class="status-badge">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Ready</span>
+            </div>
+        </header>
+
+        <div class="config-row">
+            <input type="text" id="wsUrl" value="wss://transcript.heypixa.ai/v1/listen" placeholder="WebSocket URL">
+            <input type="password" id="apiKey" placeholder="API Key (pk_...)" autocomplete="off">
+            <input type="text" id="language" value="hi" placeholder="Lang">
+            <button class="btn btn-primary" id="connectBtn">Start</button>
+        </div>
+
+        <div class="transcript-container">
+            <div class="transcript-header">
+                <span>Live Transcript</span>
+                <button id="clearBtn">Clear</button>
+            </div>
+            <div class="transcript-canvas" id="transcriptCanvas">
+                <div class="empty-state">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                        <line x1="12" y1="19" x2="12" y2="23"/>
+                    </svg>
+                    <p>Click Start to begin transcribing</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-bar">
+            <div class="stat">Sample Rate: <span class="stat-value" id="sampleRateStat">—</span></div>
+            <div class="stat">Latency: <span class="stat-value" id="latencyStat">—</span></div>
+            <div class="stat">Chunks: <span class="stat-value" id="chunksStat">0</span></div>
+            <div class="stat">Duration: <span class="stat-value" id="durationStat">0:00</span></div>
+        </div>
+
+        <div class="debug-panel">
+            <div class="debug-header" id="debugToggle">
+                <span>Debug Log</span>
+                <span id="debugArrow">▼</span>
+            </div>
+            <div class="debug-log" id="debugLog"></div>
+        </div>
+    </div>
+
+    <script>
+    /**
+     * Luna STT Client
+     * ===============
+     * 
+     * WebSocket streaming client for Luna Speech-to-Text API.
+     * 
+     * Connection flow:
+     * 1. Connect to WebSocket with auth params
+     * 2. Receive Metadata message (session info)
+     * 3. Stream raw PCM audio (linear16, 16kHz, mono)
+     * 4. Receive Results messages (partial and final)
+     * 5. Send Finalize message to end session
+     * 
+     * Audio pipeline:
+     * 1. getUserMedia captures audio at browser's native rate
+     * 2. ScriptProcessor processes audio in chunks
+     * 3. Resample from browser rate (e.g., 48kHz) to 16kHz
+     * 4. Convert Float32 to Int16 PCM
+     * 5. Send raw bytes over WebSocket
+     */
+    
+    class LunaSTTClient {
+        constructor() {
+            // WebSocket state
+            this.ws = null;
+            this.sessionId = null;
+            
+            // Audio state
+            this.audioContext = null;
+            this.mediaStream = null;
+            this.processor = null;
+            this.isRunning = false;
+            
+            // Audio configuration
+            this.targetSampleRate = 16000;  // Server expects 16kHz
+            this.browserSampleRate = 48000; // Will be detected
+            
+            // Transcript state
+            this.finalText = '';
+            this.partialText = '';
+            
+            // Stats
+            this.chunkCount = 0;
+            this.lastResultTime = 0;
+            this.startTime = null;
+            this.durationInterval = null;
+            
+            this.initUI();
+        }
+
+        // =====================================================================
+        // UI Methods
+        // =====================================================================
+        
+        initUI() {
+            document.getElementById('connectBtn').onclick = () => this.toggle();
+            document.getElementById('clearBtn').onclick = () => this.clearTranscript();
+            document.getElementById('debugToggle').onclick = () => this.toggleDebug();
+            
+            // Load saved API key from localStorage
+            const savedKey = localStorage.getItem('luna_api_key');
+            if (savedKey) {
+                document.getElementById('apiKey').value = savedKey;
+            }
+        }
+
+        toggleDebug() {
+            const log = document.getElementById('debugLog');
+            const arrow = document.getElementById('debugArrow');
+            const isHidden = log.style.display === 'none';
+            log.style.display = isHidden ? 'block' : 'none';
+            arrow.textContent = isHidden ? '▲' : '▼';
+        }
+
+        log(message, type = 'info') {
+            const logEl = document.getElementById('debugLog');
+            const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+            const div = document.createElement('div');
+            div.className = type;
+            div.textContent = `[${time}] ${message}`;
+            logEl.appendChild(div);
+            logEl.scrollTop = logEl.scrollHeight;
+            
+            // Also log to console
+            const consoleMethod = type === 'error' ? console.error : console.log;
+            consoleMethod(`[Luna STT] ${message}`);
+        }
+
+        setStatus(text, state = 'idle') {
+            document.getElementById('statusText').textContent = text;
+            const dot = document.getElementById('statusDot');
+            dot.classList.remove('live', 'error');
+            if (state === 'live') dot.classList.add('live');
+            if (state === 'error') dot.classList.add('error');
+        }
+
+        updateTranscript() {
+            const canvas = document.getElementById('transcriptCanvas');
+            
+            if (!this.finalText && !this.partialText) {
+                canvas.innerHTML = `
+                    <div class="empty-state">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                            <line x1="12" y1="19" x2="12" y2="23"/>
+                        </svg>
+                        <p>${this.isRunning ? 'Listening...' : 'Click Start to begin transcribing'}</p>
+                    </div>
+                `;
+                return;
+            }
+
+            let html = '';
+            
+            // Final (confirmed) text
+            if (this.finalText) {
+                html += `<span class="final">${this.escapeHtml(this.finalText)}</span>`;
+            }
+            
+            // Partial (in-progress) text
+            if (this.partialText) {
+                if (this.finalText && !this.finalText.endsWith(' ')) {
+                    html += ' ';
+                }
+                html += `<span class="partial">${this.escapeHtml(this.partialText)}</span>`;
+            }
+            
+            // Blinking cursor when active
+            if (this.isRunning) {
+                html += '<span class="cursor"></span>';
+            }
+            
+            canvas.innerHTML = html;
+            canvas.scrollTop = canvas.scrollHeight;
+        }
+
+        escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        clearTranscript() {
+            this.finalText = '';
+            this.partialText = '';
+            this.updateTranscript();
+            this.log('Transcript cleared');
+        }
+
+        updateDuration() {
+            if (!this.startTime) return;
+            const elapsed = Math.floor((Date.now() - this.startTime) / 1000);
+            const mins = Math.floor(elapsed / 60);
+            const secs = elapsed % 60;
+            document.getElementById('durationStat').textContent = 
+                `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        // =====================================================================
+        // Connection Management
+        // =====================================================================
+        
+        async toggle() {
+            if (this.isRunning) {
+                this.stop();
+            } else {
+                await this.start();
+            }
+        }
+
+        async start() {
+            const apiKey = document.getElementById('apiKey').value.trim();
+            if (!apiKey) {
+                alert('Please enter an API key');
+                return;
+            }
+            
+            // Save API key for convenience
+            localStorage.setItem('luna_api_key', apiKey);
+
+            const btn = document.getElementById('connectBtn');
+            btn.disabled = true;
+            btn.textContent = 'Connecting...';
+
+            try {
+                await this.connectWebSocket(apiKey);
+            } catch (err) {
+                this.log(`Connection failed: ${err.message}`, 'error');
+                this.setStatus('Error', 'error');
+                btn.disabled = false;
+                btn.textContent = 'Start';
+            }
+        }
+
+        async connectWebSocket(apiKey) {
+            // Build WebSocket URL with parameters
+            const baseUrl = document.getElementById('wsUrl').value;
+            const language = document.getElementById('language').value;
+            
+            const url = new URL(baseUrl);
+            url.searchParams.set('language', language);
+            url.searchParams.set('encoding', 'linear16');
+            url.searchParams.set('sample_rate', this.targetSampleRate);
+            url.searchParams.set('api_key', apiKey);  // Query param auth
+
+            this.log(`Connecting to ${url.host}...`);
+
+            return new Promise((resolve, reject) => {
+                this.ws = new WebSocket(url.toString());
+                
+                this.ws.onopen = async () => {
+                    this.log('WebSocket connected', 'success');
+                    this.setStatus('Connected', 'live');
+                    
+                    try {
+                        await this.startAudioCapture();
+                        resolve();
+                    } catch (err) {
+                        reject(err);
+                    }
+                };
+
+                this.ws.onmessage = (event) => {
+                    this.handleMessage(JSON.parse(event.data));
+                };
+
+                this.ws.onerror = (event) => {
+                    this.log('WebSocket error', 'error');
+                    reject(new Error('WebSocket connection failed'));
+                };
+
+                this.ws.onclose = (event) => {
+                    const wasClean = event.code === 1000;
+                    this.log(`Disconnected (code: ${event.code})`, wasClean ? 'info' : 'warning');
+                    this.cleanup();
+                };
+            });
+        }
+
+        handleMessage(msg) {
+            const msgType = msg.type;
+
+            // Session metadata
+            if (msgType === 'Metadata') {
+                this.sessionId = msg.request_id;
+                this.log(`Session started: ${this.sessionId}`, 'success');
+                return;
+            }
+
+            // Transcription result
+            if (msgType === 'Results') {
+                // Track latency between results
+                const now = Date.now();
+                if (this.lastResultTime) {
+                    const latency = now - this.lastResultTime;
+                    document.getElementById('latencyStat').textContent = `${latency}ms`;
+                }
+                this.lastResultTime = now;
+
+                // Extract transcript
+                // Response format: {"type": "Results", "transcript": "...", "is_final": bool}
+                const transcript = msg.transcript || '';
+                const isFinal = msg.is_final;
+                
+                if (isFinal) {
+                    // Append to final text
+                    if (this.finalText && transcript) {
+                        this.finalText += ' ' + transcript;
+                    } else if (transcript) {
+                        this.finalText = transcript;
+                    }
+                    this.partialText = '';
+                    this.log(`[Final] ${transcript}`, 'success');
+                } else {
+                    // Update partial (replaces previous partial)
+                    this.partialText = transcript;
+                }
+                
+                this.updateTranscript();
+                return;
+            }
+
+            // Server error
+            if (msgType === 'Error') {
+                this.log(`Server error: ${msg.message}`, 'error');
+                return;
+            }
+
+            // Unknown message type
+            this.log(`Unknown message type: ${msgType}`, 'warning');
+        }
+
+        // =====================================================================
+        // Audio Capture
+        // =====================================================================
+        
+        async startAudioCapture() {
+            this.log('Requesting microphone access...');
+            
+            // Request microphone
+            this.mediaStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    channelCount: 1,
+                    echoCancellation: true,
+                    noiseSuppression: false,  // Server handles NC
+                    autoGainControl: true
+                }
+            });
+
+            // Create audio context
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            this.browserSampleRate = this.audioContext.sampleRate;
+            
+            this.log(`Browser sample rate: ${this.browserSampleRate}Hz → Target: ${this.targetSampleRate}Hz`);
+            document.getElementById('sampleRateStat').textContent = 
+                `${this.browserSampleRate}→${this.targetSampleRate}`;
+
+            // Create audio source
+            const source = this.audioContext.createMediaStreamSource(this.mediaStream);
+            
+            // Create processor for audio chunks
+            // Buffer size must be power of 2 (256, 512, 1024, 2048, 4096)
+            // 1024 at 48kHz ≈ 21ms per chunk → ~341 samples at 16kHz
+            const bufferSize = 1024;
+            this.processor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
+
+            this.processor.onaudioprocess = (e) => {
+                if (!this.isRunning || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                    return;
+                }
+
+                // Get audio data
+                const inputData = e.inputBuffer.getChannelData(0);
+                
+                // Resample to target rate
+                const resampled = this.resample(inputData, this.browserSampleRate, this.targetSampleRate);
+                
+                // Convert to 16-bit PCM
+                const pcm16 = this.float32ToPCM16(resampled);
+                
+                // Send over WebSocket
+                this.ws.send(pcm16);
+                
+                // Update stats
+                this.chunkCount++;
+                document.getElementById('chunksStat').textContent = this.chunkCount;
+            };
+
+            // Connect audio pipeline
+            source.connect(this.processor);
+            this.processor.connect(this.audioContext.destination);
+
+            // Update state
+            this.isRunning = true;
+            this.startTime = Date.now();
+            this.durationInterval = setInterval(() => this.updateDuration(), 1000);
+            
+            this.setStatus('Recording', 'live');
+            this.log('Audio capture started', 'success');
+            
+            // Update button
+            const btn = document.getElementById('connectBtn');
+            btn.textContent = 'Stop';
+            btn.disabled = false;
+            btn.classList.remove('btn-primary');
+            btn.classList.add('btn-stop');
+            
+            this.updateTranscript();
+        }
+
+        /**
+         * Resample audio using linear interpolation.
+         * Converts from browser's native sample rate to target rate.
+         */
+        resample(inputData, fromRate, toRate) {
+            if (fromRate === toRate) {
+                return inputData;
+            }
+
+            const ratio = fromRate / toRate;
+            const newLength = Math.floor(inputData.length / ratio);
+            const result = new Float32Array(newLength);
+
+            for (let i = 0; i < newLength; i++) {
+                const srcIndex = i * ratio;
+                const srcIndexFloor = Math.floor(srcIndex);
+                const srcIndexCeil = Math.min(srcIndexFloor + 1, inputData.length - 1);
+                const t = srcIndex - srcIndexFloor;
+                
+                // Linear interpolation
+                result[i] = inputData[srcIndexFloor] * (1 - t) + inputData[srcIndexCeil] * t;
+            }
+
+            return result;
+        }
+
+        /**
+         * Convert Float32 audio samples to 16-bit PCM (little-endian).
+         * This is the "linear16" encoding expected by the server.
+         */
+        float32ToPCM16(float32Array) {
+            const pcm16 = new Int16Array(float32Array.length);
+            
+            for (let i = 0; i < float32Array.length; i++) {
+                // Clamp to [-1, 1]
+                const s = Math.max(-1, Math.min(1, float32Array[i]));
+                // Convert to 16-bit range
+                pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
+            
+            return pcm16.buffer;
+        }
+
+        // =====================================================================
+        // Cleanup
+        // =====================================================================
+        
+        stop() {
+            // Send finalize to server
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                this.log('Sending Finalize...');
+                this.ws.send(JSON.stringify({ type: 'Finalize' }));
+                
+                // Close after brief delay to allow server to process
+                setTimeout(() => {
+                    if (this.ws) {
+                        this.ws.close(1000, 'Client stopped');
+                    }
+                }, 500);
+            }
+
+            this.cleanup();
+        }
+
+        cleanup() {
+            this.isRunning = false;
+            
+            // Stop duration timer
+            if (this.durationInterval) {
+                clearInterval(this.durationInterval);
+                this.durationInterval = null;
+            }
+            
+            // Close audio context
+            if (this.audioContext) {
+                this.audioContext.close().catch(() => {});
+                this.audioContext = null;
+            }
+            
+            // Stop media tracks
+            if (this.mediaStream) {
+                this.mediaStream.getTracks().forEach(track => track.stop());
+                this.mediaStream = null;
+            }
+            
+            // Clear processor
+            this.processor = null;
+            
+            // Reset WebSocket
+            this.ws = null;
+            this.sessionId = null;
+
+            // Update UI
+            this.setStatus('Ready', 'idle');
+            const btn = document.getElementById('connectBtn');
+            btn.textContent = 'Start';
+            btn.disabled = false;
+            btn.classList.remove('btn-stop');
+            btn.classList.add('btn-primary');
+            
+            this.updateTranscript();
+        }
+    }
+
+    // Initialize client on page load
+    const client = new LunaSTTClient();
+    </script>
+</body>
+</html>
