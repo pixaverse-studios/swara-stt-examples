@@ -10,12 +10,11 @@
 
 The Luna Streaming API provides real-time speech-to-text transcription with:
 
-- **Voice Activity Detection (VAD)**: Automatic speech segmentation
-- **Noise Cancellation**: Built-in audio cleaning
 - **Streaming Results**: Partial transcripts as you speak
 - **Low Latency**: Sub-second response times
+- **High Accuracy**: Optimized for Indian dialects
 
-Unlike batch transcription, results are streamed incrementally as speech is detected—not just after the audio stream ends.
+Results are streamed incrementally as you speak—not just after the audio stream ends.
 
 ---
 
